@@ -1,2 +1,11 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
+
+# Ensure wrapper has LF and stays executable on Linux
+mvnw        text eol=lf
+mvnw.cmd    text eol=crlf
+
+# Optional: keep common text files normalized
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.sh        text eol=lf
