@@ -8,9 +8,9 @@ app:
       # Kafka topic to PRODUCE the transformed message to
     sinks:
       output:
-        type: kafka
-        #file: C:\Users\akorakas\Desktop\output\output.ndjson
-        topic: snmp-traps-pipeline
+        type: file
+        file: C:\Users\akorakas\Desktop\output\output.ndjson
+        #topic: snmp-traps-pipeline
       # Dead-letter topic for "transform/pipeline" failures (valid JSON but bad content)
       dlt:
         type: kafka
@@ -55,7 +55,7 @@ spring:
 
     # --------------------------- Consumer ------------------------------------
     consumer:
-      group-id: test06                         # consumer group id
+      group-id: test07                         # consumer group id
       auto-offset-reset: earliest              # 'latest' in prod if you don’t want old data
       enable-auto-commit: false                # we control commits via the error handler
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
