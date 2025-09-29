@@ -1,60 +1,72 @@
+// src/main/java/com/example/kafka/kafka/KafkaErrorHandlingConfig.java
 package com.example.kafka.kafka;
 
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.TopicPartition;
-import org.springframework.beans.factory.annotation.Value;
+import java.util.HashMap;
+import java.util.Map;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.ConsumerRecordRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.FixedBackOff;
 
 import com.example.kafka.service.errors.BadInputException;
 import com.example.kafka.service.errors.TransformFailureException;
+import com.example.kafka.sink.SinkRouter;
 
 @Configuration
 public class KafkaErrorHandlingConfig {
 
+  /**
+   * Routes failures to either the "error" sink (bad JSON) or the "dlt" sink
+   * (pipeline/transform failure). The sink can be Kafka or file depending on YAML.
+   */
   @Bean
-  DeadLetterPublishingRecoverer deadLetterPublishingRecoverer(
-      KafkaTemplate<Object, Object> template,
-      @Value("${app.kafka.dlt-topic}") String dltTopic,
-      @Value("${app.kafka.error-topic}") String errorTopic) {
+  public DefaultErrorHandler errorHandler(SinkRouter sinks) {
 
-    // Route by exception type
-    return new DeadLetterPublishingRecoverer(template, (ConsumerRecord<?, ?> r, Exception e) -> {
-      Throwable t = unwrap(e);
-      if (t instanceof BadInputException) {
-        return new TopicPartition(errorTopic, r.partition());     // invalid JSON -> errors topic
+    ConsumerRecordRecoverer recoverer = (rec, ex) -> {
+      Throwable root = rootCause(ex);
+
+      // Original key/value as strings (null-safe)
+      String key = rec == null || rec.key() == null ? null : rec.key().toString();
+      String payload = rec == null || rec.value() == null ? "null" : rec.value().toString();
+
+      // Some provenance headers (also written by the file sink)
+      Map<String, String> hdrs = new HashMap<>();
+      if (rec != null) {
+        hdrs.put("source-topic", rec.topic());
+        hdrs.put("source-partition", String.valueOf(rec.partition()));
+        hdrs.put("source-offset", String.valueOf(rec.offset()));
       }
-      // default & pipeline failures
-      return new TopicPartition(dltTopic, r.partition());         // transform failures -> DLT
-    });
-  }
+      hdrs.put("error", root.getClass().getSimpleName());
+      hdrs.put("errorMessage", root.getMessage());
 
-  @Bean
-  DefaultErrorHandler errorHandler(DeadLetterPublishingRecoverer recoverer) {
-    // Publish once, immediately
-    var eh = new DefaultErrorHandler(recoverer, new FixedBackOff(0L, 0));
-    eh.setCommitRecovered(true); // advance offset after publishing to avoid duplicates
+      if (root instanceof BadInputException) {
+        // Invalid JSON → errors sink
+        sinks.sendError(key, payload, hdrs);
+      } else {
+        // Transform/pipeline failures → DLT sink
+        sinks.sendDlt(key, payload, hdrs);
+      }
+    };
 
-    // Never retry “known bad” exceptions
+    // Publish once, immediately; then commit so we don't redeliver the same bad record
+    DefaultErrorHandler eh = new DefaultErrorHandler(recoverer, new FixedBackOff(0L, 0));
+    eh.setCommitRecovered(true);
+
+    // Don't retry these (we know they won't succeed on retry)
     eh.addNotRetryableExceptions(
         BadInputException.class,
         TransformFailureException.class
         // optionally: org.apache.kafka.common.errors.SerializationException.class
     );
+
     return eh;
   }
 
-  private static Throwable unwrap(Throwable e) {
-    // unwrap common wrappers
-    while (e.getCause() != null
-        && (e.getClass().getName().startsWith("org.springframework.")
-         || e.getClass().getName().startsWith("java.util.concurrent"))) {
-      e = e.getCause();
-    }
-    return e;
+  private static Throwable rootCause(Throwable t) {
+    Throwable cur = t;
+    while (cur.getCause() != null) cur = cur.getCause();
+    return cur;
   }
 }
