@@ -2,15 +2,23 @@
 # App (custom) properties used by your beans
 # ─────────────────────────────────────────────────────────────────────────────
 app:
-  kafka:
-    # Kafka topic to CONSUME from
-    input-topic: snmp-traps
-    # Kafka topic to PRODUCE the transformed message to
-    output-topic: snmp-traps-pipeline
-    # Dead-letter topic for "transform/pipeline" failures (valid JSON but bad content)
-    dlt-topic: snmp-traps.dlt
-    # Errors topic for "bad input" (invalid JSON)
-    error-topic: snmp-traps.errors
+    kafka:
+      # Kafka topic to CONSUME from
+      input-topic: snmp-traps
+      # Kafka topic to PRODUCE the transformed message to
+    sinks:
+      output:
+        type: kafka
+        #file: C:\Users\akorakas\Desktop\output\output.ndjson
+        topic: snmp-traps-pipeline
+      # Dead-letter topic for "transform/pipeline" failures (valid JSON but bad content)
+      dlt:
+        type: kafka
+        topic: snmp-traps.dlt
+      # Errors topic for "bad input" (invalid JSON)
+      error:
+        type: kafka
+        topic: snmp-traps.errors
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Spring Boot Actuator & Micrometer (Prometheus) 
@@ -47,7 +55,7 @@ spring:
 
     # --------------------------- Consumer ------------------------------------
     consumer:
-      group-id: test05                         # consumer group id
+      group-id: test06                         # consumer group id
       auto-offset-reset: earliest              # 'latest' in prod if you don’t want old data
       enable-auto-commit: false                # we control commits via the error handler
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
