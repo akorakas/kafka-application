@@ -1,5 +1,5 @@
 # ====== 1) Build stage ======
-FROM maven:3.9-eclipse-temurin-17 AS build
+FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 
 # copy only the pom first (layer caching)
@@ -12,7 +12,7 @@ RUN mvn -q -DskipTests clean package
 
 # ====== 2) Runtime stage ======
 # Use a small JRE image; Temurin is stable
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:21-jre
 
 # Create app user (non-root)
 RUN addgroup -S app && adduser -S app -G app
