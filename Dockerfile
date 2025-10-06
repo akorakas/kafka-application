@@ -15,7 +15,7 @@ RUN mvn -q -DskipTests clean package
 FROM eclipse-temurin:21-jre
 
 # Create app user (non-root)
-RUN addgroup -S app && adduser -S app -G app
+RUN groupadd --system app && useradd --system --create-home --gid app app
 USER app
 
 WORKDIR /app
