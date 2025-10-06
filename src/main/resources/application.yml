@@ -2,23 +2,23 @@
 # App (custom) properties used by your beans
 # ─────────────────────────────────────────────────────────────────────────────
 app:
-    kafka:
-      # Kafka topic to CONSUME from
-      input-topic: snmp-traps
-      # Kafka topic to PRODUCE the transformed message to
-    sinks:
-      output:
-        type: file
-        file: C:\Users\akorakas\Desktop\output\output.ndjson
-        #topic: snmp-traps-pipeline
-      # Dead-letter topic for "transform/pipeline" failures (valid JSON but bad content)
-      dlt:
-        type: kafka
-        topic: snmp-traps.dlt
-      # Errors topic for "bad input" (invalid JSON)
-      error:
-        type: kafka
-        topic: snmp-traps.errors
+  kafka:
+    # Kafka topic to CONSUME from
+    input-topic: snmp-traps
+  # Kafka topic to PRODUCE the transformed message to
+  sinks:
+    output:
+      type: kafka
+      #file: C:\Users\akorakas\Desktop\output\output.ndjson
+      topic: snmp-traps-pipeline
+    # Dead-letter topic for "transform/pipeline" failures (valid JSON but bad content)
+    dlt:
+      type: kafka
+      topic: snmp-traps.dlt
+    # Errors topic for "bad input" (invalid JSON)
+    error:
+      type: kafka
+      topic: snmp-traps.errors
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Spring Boot Actuator & Micrometer (Prometheus) 
@@ -52,10 +52,13 @@ spring:
   kafka:
     # Comma-separated list of bootstrap brokers
     bootstrap-servers: 10.200.14.65:9092
+    properties:
+      "[security.protocol]": PLAINTEXT
+      "[allow.auto.create.topics]": false
 
     # --------------------------- Consumer ------------------------------------
     consumer:
-      group-id: test07                         # consumer group id
+      group-id: test08                         # consumer group id
       auto-offset-reset: earliest              # 'latest' in prod if you don’t want old data
       enable-auto-commit: false                # we control commits via the error handler
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
@@ -68,6 +71,7 @@ spring:
         "[spring.json.trusted.packages]": "com.example.kafka.model"
         "[spring.json.value.default.type]": "com.example.kafka.model.InputEvent"
         "[spring.json.use.type.headers]": false
+        "[allow.auto.create.topics]": false   # don't trigger broker auto-create
 
         # Throughput/latency knobs (tune to your load & message sizes)
         "[max.poll.records]": 10000            # number of records per poll
@@ -111,6 +115,8 @@ spring:
         "[compression.type]": lz4             # good compression/speed tradeoff
         "[request.timeout.ms]": 5000
         "[max.block.ms]": 5000                # producer send() max block
+        "[allow.auto.create.topics]": false   # same for producers
+        
 
       # --- Secure producer example (uncomment & mirror consumer settings) ---
       # properties:
@@ -130,15 +136,24 @@ spring:
       concurrency: 1
       # How container acks records; BATCH is a solid default with manual commits via handler
       ack-mode: BATCH
+      auto-startup: false
+      missing-topics-fatal: true   # fail container startup if a topic is missing
+
+    admin:
+      fail-fast: true
+      properties:
+        "[security.protocol]": PLAINTEXT
+        "[request.timeout.ms]": 10000
+        "[default.api.timeout.ms]": 10000
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging levels (raise to DEBUG while troubleshooting networking)
 # ─────────────────────────────────────────────────────────────────────────────
 logging:
   level:
-    org.apache.kafka.clients.NetworkClient: INFO
-    org.apache.kafka.common.network: INFO
-    org.springframework.kafka: INFO
+    "[org.apache.kafka.clients.NetworkClient]": INFO
+    "[org.apache.kafka.common.network]": INFO
+    "[org.springframework.kafka]": INFO
     # com.example.kafka: DEBUG     # your app package (enable for local debugging)
 
 # ─────────────────────────────────────────────────────────────────────────────
