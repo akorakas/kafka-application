@@ -28,7 +28,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,metrics,prometheus     # expose these endpoints over HTTP
+        include: health,metrics,prometheus,env,info     # expose these endpoints over HTTP
       base-path: /actuator                     # GET /actuator/health, /actuator/metrics, /actuator/prometheus
   endpoint:
     health:
