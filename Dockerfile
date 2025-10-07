@@ -1,5 +1,5 @@
 # ====== 1) Build stage ======
-FROM maven:3.9.9-eclipse-temurin-22 AS build
+FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 
 # copy only the pom first (layer caching)
@@ -12,14 +12,14 @@ RUN mvn -q -DskipTests clean package
 
 # ====== 2) Runtime stage ======
 # Use a small JRE image; Temurin is stable
-FROM eclipse-temurin:22-jre
+FROM eclipse-temurin:21-jre
 
 # Install curl just for the healthcheck (then drop to non-root)
 USER root
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/*
- 
+
 # Create app user (non-root)
 RUN groupadd --system app && useradd --system --create-home --gid app app
 USER app
