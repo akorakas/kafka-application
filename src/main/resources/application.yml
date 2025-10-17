@@ -51,14 +51,15 @@ management:
 spring:
   kafka:
     # Comma-separated list of bootstrap brokers
-    bootstrap-servers: 10.200.14.65:9092
-    properties:
-      "[security.protocol]": PLAINTEXT
-      "[allow.auto.create.topics]": false
+#    bootstrap-servers: 10.200.14.65:9092
+#    properties:
+#      "[security.protocol]": PLAINTEXT
+#      "[allow.auto.create.topics]": false
 
     # --------------------------- Consumer ------------------------------------
     consumer:
-      group-id: test08                         # consumer group id
+      bootstrap-servers: 10.200.14.65:9092
+      group-id: test09                         # consumer group id
       auto-offset-reset: earliest              # 'latest' in prod if you don’t want old data
       enable-auto-commit: false                # we control commits via the error handler
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
@@ -99,6 +100,7 @@ spring:
 
     # --------------------------- Producer ------------------------------------
     producer:
+      bootstrap-servers: 10.200.14.65:9092
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       acks: all                               # strongest durability (leader+replicas)

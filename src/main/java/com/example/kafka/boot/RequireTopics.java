@@ -1,141 +1,154 @@
+// src/main/java/com/example/kafka/boot/RequireTopics.java
 package com.example.kafka.boot;
 
-import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.stream.Collectors;
 
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.ListTopicsOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
-import org.springframework.kafka.core.KafkaAdmin;
 
 import com.example.kafka.service.config.SinksProperties;
 
-/**
- * Verifies at startup that all required Kafka topics already exist.
- * If any required topic is missing, the application fails fast.
- *
- * Also starts Kafka listeners only after successful verification.
- *
- * Recommended in application.yml:
- *   spring.kafka.listener.auto-startup: false
- */
 @Configuration
 public class RequireTopics {
 
   private static final Logger log = LoggerFactory.getLogger(RequireTopics.class);
 
-  /** Build an AdminClient from Spring Boot's KafkaAdmin properties. */
+  /** Admin client for the INPUT cluster (built from spring.kafka.consumer.*) */
   @Bean
-  public AdminClient adminClient(KafkaAdmin admin) {
-    return AdminClient.create(admin.getConfigurationProperties());
+  @Qualifier("inputAdminClient")
+  public AdminClient inputAdminClient(KafkaProperties props) {
+    // Uses consumer-side bootstrap-servers + security (Option A)
+    Map<String, Object> cfg = new HashMap<>(props.buildConsumerProperties(null));
+    return AdminClient.create(cfg);
+  }
+
+  /** Admin client for the OUTPUT cluster (built from spring.kafka.producer.*) */
+  @Bean
+  @Qualifier("outputAdminClient")
+  public AdminClient outputAdminClient(KafkaProperties props) {
+    // Uses producer-side bootstrap-servers + security (Option A)
+    Map<String, Object> cfg = new HashMap<>(props.buildProducerProperties(null));
+    return AdminClient.create(cfg);
   }
 
   /**
    * On startup:
-   *  1) Check cluster connectivity/auth
-   *  2) List existing topics (without triggering auto-create)
-   *  3) Compare with required topics; if any are missing -> throw
-   *  4) Start listener containers on success
+   *  1) Check connectivity/auth to both clusters
+   *  2) Verify input topic on INPUT cluster
+   *  3) Verify sink topics (only kafka-type) on OUTPUT cluster
+   *  4) Start listener containers
    */
   @Bean
   public ApplicationRunner verifyAllTopics(
-      AdminClient admin,
+      @Qualifier("inputAdminClient")  AdminClient inputAdmin,
+      @Qualifier("outputAdminClient") AdminClient outputAdmin,
       KafkaListenerEndpointRegistry registry,
       @Value("${app.kafka.input-topic}") String inputTopic,
       SinksProperties sinksProps,
       @Value("${app.kafka.verify-timeout-sec:10}") int verifyTimeoutSec
   ) {
     return (ApplicationArguments args) -> {
-      // Touch args to satisfy IDE “unused lambda parameter” hint (only logs in DEBUG)
       if (log.isDebugEnabled() && args != null) {
-        String[] src = args.getSourceArgs();
-        log.debug("Application startup args count: {}", (src == null ? 0 : src.length));
+        log.debug("Startup args: {}", Arrays.toString(args.getSourceArgs()));
       }
 
-      // Collect required topics (trim, skip blanks). Only include sink topics if type == "kafka"
-      Set<String> required = new LinkedHashSet<>();
-      required.add(safe(inputTopic));
+      // 1) Verify both clusters are reachable
+      verifyClusterReachable(inputAdmin,  verifyTimeoutSec, "INPUT");
+      verifyClusterReachable(outputAdmin, verifyTimeoutSec, "OUTPUT");
 
-      if (isKafka(sinksProps.getOutput().getType())) {
-        required.add(safe(sinksProps.getOutput().getTopic()));
-      }
-      if (isKafka(sinksProps.getDlt().getType())) {
-        required.add(safe(sinksProps.getDlt().getTopic()));
-      }
-      if (isKafka(sinksProps.getError().getType())) {
-        required.add(safe(sinksProps.getError().getTopic()));
-      }
+      // 2) Verify input topic on INPUT cluster
+      var requiredInput = Set.of(trimOrNull(inputTopic));
+      verifyTopicsExist(inputAdmin, requiredInput, verifyTimeoutSec, "INPUT");
 
-      required.removeIf(t -> t == null || t.isBlank());
-      List<String> topics = new ArrayList<>(required);
+      // 3) Verify sink topics (kafka-only) on OUTPUT cluster
+      Set<String> requiredOutput = new LinkedHashSet<>();
+      if (isKafka(sinksProps.getOutput().getType())) requiredOutput.add(trimOrNull(sinksProps.getOutput().getTopic()));
+      if (isKafka(sinksProps.getDlt().getType()))    requiredOutput.add(trimOrNull(sinksProps.getDlt().getTopic()));
+      if (isKafka(sinksProps.getError().getType()))  requiredOutput.add(trimOrNull(sinksProps.getError().getTopic()));
+      requiredOutput.removeIf(t -> t == null || t.isBlank());
 
-      if (topics.isEmpty()) {
-        throw new IllegalStateException(
-            "No required topics configured. Check app.kafka.input-topic and app.sinks.*.topic");
-      }
-
-      log.info("Verifying required Kafka topics: {}", topics);
-
-      // 1) Verify cluster reachability/auth
-      try {
-        admin.describeCluster().nodes().get(verifyTimeoutSec, TimeUnit.SECONDS);
-      } catch (InterruptedException ie) {
-        Thread.currentThread().interrupt();
-        throw new IllegalStateException("Interrupted while contacting Kafka cluster.", ie);
-      } catch (ExecutionException | TimeoutException e) {
-        throw new IllegalStateException(
-            "Cannot reach/authenticate to Kafka cluster. Check bootstrap.servers and security.*.", e);
+      if (!requiredOutput.isEmpty()) {
+        verifyTopicsExist(outputAdmin, requiredOutput, verifyTimeoutSec, "OUTPUT");
+      } else {
+        log.info("No OUTPUT topics to verify (all sinks are file-based or unset).");
       }
 
-      // 2) List current topics (no auto-creation)
-      final Set<String> existing;
-      try {
-        ListTopicsOptions options = new ListTopicsOptions().listInternal(false);
-        existing = admin.listTopics(options).names().get(verifyTimeoutSec, TimeUnit.SECONDS);
-      } catch (InterruptedException ie) {
-        Thread.currentThread().interrupt();
-        throw new IllegalStateException("Interrupted while listing topics.", ie);
-      } catch (ExecutionException | TimeoutException e) {
-        throw new IllegalStateException("Failed to list topics via AdminClient (network/auth/timeout).", e);
-      }
-
-      // 3) Determine missing topics
-      List<String> missing = topics.stream()
-          .filter(t -> !existing.contains(t))
-          .collect(Collectors.toList());
-
-      if (!missing.isEmpty()) {
-        String msg = "Missing required Kafka topic(s): " + String.join(", ", missing);
-        log.error(msg);
-        throw new IllegalStateException(msg);
-      }
-
-      log.info("All required Kafka topics are present.");
-
-      // 4) Start Kafka listeners
+      // 4) Start Kafka listeners after successful verification
       registry.start();
       log.info("Kafka listeners started after topic verification.");
     };
+  }
+
+  private static void verifyClusterReachable(AdminClient admin, int timeoutSec, String tag) {
+    try {
+      admin.describeCluster().nodes().get(timeoutSec, TimeUnit.SECONDS);
+      log.info("[{}] Kafka cluster reachable.", tag);
+    } catch (InterruptedException ie) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Interrupted while contacting " + tag + " Kafka cluster.", ie);
+    } catch (ExecutionException | TimeoutException e) {
+      throw new IllegalStateException("Cannot reach/authenticate to " + tag
+          + " Kafka cluster. Check bootstrap.servers and security.*.", e);
+    }
+  }
+
+  private static void verifyTopicsExist(AdminClient admin, Set<String> required, int timeoutSec, String tag) {
+    List<String> topics = required.stream()
+        .filter(Objects::nonNull)
+        .filter(s -> !s.isBlank())
+        .toList();
+
+    if (topics.isEmpty()) {
+      throw new IllegalStateException("No required topics configured for " + tag + " cluster.");
+    }
+
+    log.info("[{}] Verifying required topics: {}", tag, topics);
+
+    final Set<String> existing;
+    try {
+      ListTopicsOptions options = new ListTopicsOptions().listInternal(false);
+      existing = admin.listTopics(options).names().get(timeoutSec, TimeUnit.SECONDS);
+    } catch (InterruptedException ie) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Interrupted while listing topics on " + tag + " cluster.", ie);
+    } catch (ExecutionException | TimeoutException e) {
+      throw new IllegalStateException("Failed to list topics via AdminClient on " + tag + " cluster.", e);
+    }
+
+    List<String> missing = topics.stream().filter(t -> !existing.contains(t)).toList();
+    if (!missing.isEmpty()) {
+      String msg = "[" + tag + "] Missing required topic(s): " + String.join(", ", missing);
+      log.error(msg);
+      throw new IllegalStateException(msg);
+    }
+
+    log.info("[{}] All required topics are present.", tag);
   }
 
   private static boolean isKafka(String type) {
     return type != null && "kafka".equalsIgnoreCase(type.trim());
   }
 
-  private static String safe(String s) {
-    return (s == null) ? null : s.trim();
+  private static String trimOrNull(String s) {
+    return s == null ? null : s.trim();
   }
 }
